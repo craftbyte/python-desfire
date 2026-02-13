@@ -23,7 +23,10 @@ class CMAC:
         logger.debug("Initializing CMAC with provided key. Calculating K1 and K2.")
 
         self._key = key
-        cipher = get_ciphermod(key_type, key, bchr(0) * len(key))
+        iv_len = len(key)
+        if key_type == DESFireKeyType.DF_KEY_3K3DES or key_type == DESFireKeyType.DF_KEY_2K3DES:
+            iv_len = 8
+        cipher = get_ciphermod(key_type, key, bchr(0) * iv_len)
         self._bs = cipher.block_size
 
         # Section 5.3 of NIST SP 800 38B
