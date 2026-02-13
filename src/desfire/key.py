@@ -81,16 +81,19 @@ class DESFireKey:
             if self.key_size == 8:
                 logger.debug("Regular DES key type detected, setting key size to 8 bytes")
                 self.cipher_block_size = 8
+                self.iv0 = [0] * 8
             # 2DES is used (3DES with 2 keys only)
             elif self.key_size == 16:
                 logger.debug("2K3DES key type detected, setting key size to 16 bytes")
                 self.cipher_block_size = 8
+                self.iv0 = [0] * 8
             else:
                 raise DESFireException("Key length error! When using 2K3DES, the key must be 8 or 16 bytes long.")
         elif self.key_type == DESFireKeyType.DF_KEY_3K3DES:
             logger.debug("3K3DES key type detected, setting key size to 24 bytes")
             assert self.key_size == 24
             self.cipher_block_size = 8
+            self.iv0 = [0] * 8
         else:
             logger.error("Unknown key type detected.")
             raise DESFireException("Unknown key type.")
