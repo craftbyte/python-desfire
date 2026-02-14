@@ -253,6 +253,10 @@ class DESFire:
             # Remove all null bytes from the end
             while decrypted_response[-1] == 0x00:
                 decrypted_response = decrypted_response[:-1]
+            if decrypted_response[-1] == 0x80:
+                decrypted_response = decrypted_response[:-1]
+
+            
 
             logger.debug("Decrypted response (trimmed): " + to_hex_string(decrypted_response))
 
