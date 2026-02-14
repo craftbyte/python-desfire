@@ -1061,6 +1061,54 @@ class DESFire:
         logger.debug(f"Total data that has been read: {to_hex_string(ret)}")
         return ret
 
+    def read_records(self, file_id: int, file_settings: FileSettings, record_number: int = 0, record_count: int = 0) -> list[int]:
+        """
+        Read file data for file_id. SelectApplication needs to be called first
+        Authentication is NOT ALWAYS needed to call this function. Depends on the application/card settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings.
+                Can be obtained using the `get_file_settings` method.
+            record_number (int): Number of the record to read. If 0, reading starts from the first (newest) record.
+            record_count (int): Number of records to read. If 0, all records are read.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+
+        Returns:
+            list[int]: Raw data read from the file
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to read record data without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        assert file_settings.encryption is not None
+        logger.info(f"Executing command: read_record (0x{DESFireCommand.READ_RECORDS.value:02x}) for file {file_id:x}")
+
+        file_id_bytes = get_list(file_id, 1)
+        ret = []
+
+        params = file_id_bytes + get_list(record_number, 3, "little") + get_list(record_count, 3, "little")
+        ret = self._transceive(
+            self._command(DESFireCommand.READ_RECORDS.value, params),
+            DESFireCommunicationMode.PLAIN,
+            file_settings.encryption,
+        )
+        logger.debug(f"Read raw data: {to_hex_string(ret)}")
+        
+        records = len(ret) // file_settings.file_size
+        ret_records = []
+        for i in range(records):
+            record_data = ret[i*file_settings.file_size:(i+1)*file_settings.file_size]
+            logger.debug(f"Record {i}: {to_hex_string(record_data)}")
+            ret_records += [record_data]
+        return ret_records
+
     def create_standard_file(self, file_id: int, file_settings: FileSettings):
         """
         Creates a standard data file in the application currently selected. `select_application` must be called first.
