@@ -244,8 +244,6 @@ class DESFire:
 
             # Decrypt the response
             logger.debug("Encrypted response: " + to_hex_string(response))
-            padded_response = self._add_padding(response)
-            logger.debug("Padded response: " + to_hex_string(padded_response))
             decrypted_response = self.session_key.decrypt(padded_response)
             logger.debug("Decrypted response: " + to_hex_string(decrypted_response))
 
