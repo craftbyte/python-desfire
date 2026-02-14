@@ -256,8 +256,6 @@ class DESFire:
             if decrypted_response[-1] == 0x80:
                 decrypted_response = decrypted_response[:-1]
 
-            
-
             logger.debug("Decrypted response (trimmed): " + to_hex_string(decrypted_response))
 
             # Check if the CRC is correct - Status byte is appended to the data before CRC calculation
