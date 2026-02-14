@@ -1063,7 +1063,7 @@ class DESFire:
 
     def read_records(
         self, file_id: int, file_settings: FileSettings, record_number: int = 0, record_count: int = 0
-    ) -> list[int]:
+    ) -> list[list[int]]:
         """
         Read file data for file_id. SelectApplication needs to be called first
         Authentication is NOT ALWAYS needed to call this function. Depends on the application/card settings.
