@@ -134,7 +134,7 @@ class DESFireKey:
         """
         logger.debug("Setting key value to provided data")
         self.key_bytes = bytes(get_list(key))
-        self._set_key_size(len(self.key_bytes))
+        self.cipher_init()
 
     def encrypt(self, data: list[int]) -> list[int]:
         """

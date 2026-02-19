@@ -130,7 +130,10 @@ def get_ciphermod(key_type: DESFireKeyType, key: bytes, iv: bytes):
         return AES.new(key, AES.MODE_CBC, iv)
     elif key_type == DESFireKeyType.DF_KEY_3K3DES or (key_type == DESFireKeyType.DF_KEY_2K3DES and len(key) == 16):
         logger.debug("Creating 3DES cipher module")
-        return DES3.new(key, DES3.MODE_CBC, iv)
+        try:
+            return DES3.new(key, DES3.MODE_CBC, iv)
+        except ValueError:
+            return DES.new(key[:8], DES.MODE_CBC, iv[-8:])
     elif key_type == DESFireKeyType.DF_KEY_2K3DES and len(key) == 8:
         logger.debug("Creating 2DES cipher module")
         return DES.new(key, DES.MODE_CBC, iv)

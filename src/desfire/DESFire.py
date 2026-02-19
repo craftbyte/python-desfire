@@ -363,14 +363,14 @@ class DESFire:
             DESFireCommunicationMode.PLAIN,
             af_passthrough=True,
         )
-        logger.debug("Encrypion: Random B (enc):" + to_hex_string(RndB_enc))
+        logger.debug("Encryption: Random B (enc): %s", to_hex_string(RndB_enc))
 
         # Check if the key type is correct
         if (key.key_type == DESFireKeyType.DF_KEY_3K3DES or key.key_type == DESFireKeyType.DF_KEY_AES) and len(
             RndB_enc
         ) != 16:
             logger.warning(
-                "Encrypion:  Card expects a different key type. "
+                "Encryption:  Card expects a different key type. "
                 "(enc B size is less than the blocksize of the key you specified)"
             )
             raise DESFireException(
@@ -382,25 +382,25 @@ class DESFire:
 
         # Decrypt the RndB using the provided master key
         RndB = key.decrypt(RndB_enc)
-        logger.debug("Encrypion: Random B (dec): " + to_hex_string(RndB))
+        logger.debug("Encryption: Random B (dec): %s", to_hex_string(RndB))
 
         # Rotate RndB to the left by one byte
         RndB_rot = RndB[1:] + [RndB[0]]
-        logger.debug("Encrypion: Random B (dec, rot): " + to_hex_string(RndB_rot))
+        logger.debug("Encryption: Random B (dec, rot): %s", to_hex_string(RndB_rot))
 
         # Challenge can be either provided externally, or generated randomly
         if challenge is not None:
             RndA = get_list(challenge)
         else:
             RndA = get_list(get_random_bytes(len(RndB)))
-        logger.debug("Encrypion: Random A: " + to_hex_string(RndA))
+        logger.debug("Encryption: Random A: %s", to_hex_string(RndA))
 
         # Concatenate RndA and RndB_rot and encrypt it with the master key
         RndAB = list(RndA) + RndB_rot
-        logger.debug("Encrypion: Random AB: " + to_hex_string(RndAB))
+        logger.debug("Encryption: Random AB: %s", to_hex_string(RndAB))
         key.set_iv(RndB_enc)
         RndAB_enc = key.encrypt(RndAB)
-        logger.debug("Encrypion: Random AB (enc): " + to_hex_string(RndAB_enc))
+        logger.debug("Encryption: Random AB (enc): %s", to_hex_string(RndAB_enc))
 
         # Send the encrypted RndAB to the card, it should reply with a positive result
         params = RndAB_enc
@@ -410,12 +410,12 @@ class DESFire:
         )
 
         # Verify that the response matches our original challenge
-        logger.debug("Encrypion: Random A (enc): " + to_hex_string(RndA_enc))
+        logger.debug("Encryption: Random A (enc): %s", to_hex_string(RndA_enc))
         key.set_iv(RndAB_enc[-key.cipher_block_size :])
         RndA_dec = key.decrypt(RndA_enc)
-        logger.debug("Encrypion: Random A (dec): " + to_hex_string(RndA_dec))
+        logger.debug("Encryption: Random A (dec): %s", to_hex_string(RndA_dec))
         RndA_dec_rot = RndA_dec[-1:] + RndA_dec[0:-1]
-        logger.debug("Encrypion: Random A (dec, rot): " + to_hex_string(RndA_dec_rot))
+        logger.debug("Encryption: Random A (dec, rot): %s", to_hex_string(RndA_dec_rot))
 
         if bytes(RndA) != bytes(RndA_dec_rot):
             raise DESFireAuthException("Authentication FAILED!")
@@ -424,7 +424,7 @@ class DESFire:
         self.is_authenticated = True
         self.last_auth_key_id = key_id
 
-        logger.debug("Encrypion: Calculating Session key")
+        logger.debug("Encryption: Calculating Session key")
         session_key_bytes = RndA[:4]
         session_key_bytes += RndB[:4]
         if key.key_size > 8:
@@ -469,7 +469,7 @@ class DESFire:
         Returns:
             list[int]: 7 byte UID of the card
         """
-        logger.info(f"Executing command: get_real_uid (0x{DESFireCommand.GET_CARD_UID.value:02x})")
+        logger.info("Executing command: get_real_uid (0x%02x)", DESFireCommand.GET_CARD_UID.value)
 
         if not self.is_authenticated:
             logger.warning("Tried to get real UID without authentication")
@@ -495,7 +495,7 @@ class DESFire:
         Raises:
             DESFireException: if an invalid configuration is provided
         """
-        logger.info(f"Executing command: get_card_version (0x{DESFireCommand.GET_VERSION.value:02x})")
+        logger.info("Executing command: get_card_version (0x%02x)", DESFireCommand.GET_VERSION.value)
 
         raw_data = self._transceive(
             self._command(DESFireCommand.GET_VERSION.value),
@@ -517,14 +517,23 @@ class DESFire:
         Raises:
             DESFireException: if an invalid configuration is provided
         """
+        
+        if self.last_selected_application is not None and self.last_selected_application != [0x00, 0x00, 0x00]:
+            logger.warning("Tried to format card without master application selected")
+            raise DESFireException("Master application must be selected to format the card!")
 
         if not self.is_authenticated:
             logger.warning("Tried to format card without authentication")
             raise DESFireException("Not authenticated!")
 
-        logger.info(f"Executing command: format_card (0x{DESFireCommand.FORMAT_PICC.value:02x})")
+        logger.info("Executing command: format_card (0x%02x)", DESFireCommand.FORMAT_PICC.value)
         cmd = DESFireCommand.FORMAT_PICC.value
         self._transceive(self._command(cmd), DESFireCommunicationMode.PLAIN, DESFireCommunicationMode.PLAIN)
+        # Reset all internal state as well, formatting clears current application and authentication state
+        self.is_authenticated = False
+        self.session_key = None
+        self.last_selected_application = None
+        self.last_auth_key_id = None
 
     #
     ## Key Related
@@ -553,7 +562,7 @@ class DESFire:
                 used to authenticate using this key or another key of the same application.
         """
 
-        logger.info(f"Executing command: get_key_setting (0x{DESFireCommand.GET_KEY_SETTINGS.value:02x})")
+        logger.info("Executing command: get_key_setting (0x%02x)", DESFireCommand.GET_KEY_SETTINGS.value)
 
         resp = self._transceive(
             self._command(DESFireCommand.GET_KEY_SETTINGS.value),
@@ -585,7 +594,9 @@ class DESFire:
         """
 
         logger.info(
-            f"Executing command: get_key_version (0x{DESFireCommand.GET_KEY_VERSION.value:02x}) for key {key_number:x}"
+            "Executing command: get_key_version (0x%02x) for key %x",
+            DESFireCommand.GET_KEY_VERSION.value,
+            key_number
         )
 
         params = get_list(key_number, 1, "big")
@@ -648,7 +659,7 @@ class DESFire:
             logger.warning("Tried to change key settings without authentication")
             raise DESFireException("Not authenticated.")
 
-        logger.info(f"Executing command: change_key_settings (0x{DESFireCommand.CHANGE_KEY_SETTINGS.value:02x})")
+        logger.info("Executing command: change_key_settings (0x%02x)", DESFireCommand.CHANGE_KEY_SETTINGS.value)
 
         key_settings = KeySettings(settings=new_settings)
 
@@ -656,7 +667,7 @@ class DESFire:
         self._transceive(
             self._command(DESFireCommand.CHANGE_KEY_SETTINGS.value, [key_settings.get_settings()]),
             DESFireCommunicationMode.ENCRYPTED,
-            DESFireCommunicationMode.CMAC,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
 
     def change_key(self, key_id: int, current_key: DESFireKey, new_key: DESFireKey, new_key_version: int | None = None):
@@ -682,7 +693,7 @@ class DESFire:
             logger.warning("Tried to change key without authentication")
             raise DESFireException("Not authenticated!")
 
-        logger.info(f"Executing command: change_key (0x{DESFireCommand.CHANGE_KEY.value:02x}) for key {key_id:x}")
+        logger.info("Executing command: change_key (0x%02x) for key %x", DESFireCommand.CHANGE_KEY.value, key_id)
 
         # If we're changing the key we're authenticated with, the message format
         # is different than if we're changing a different key.
@@ -707,7 +718,7 @@ class DESFire:
                 key_number = 0x80
             elif new_key.key_type == DESFireKeyType.DF_KEY_3K3DES:
                 key_number = 0x40
-            logger.debug(f"Key number parameter calculated: {to_hex_string([key_number])}")
+            logger.debug("Key number parameter calculated: %s", to_hex_string([key_number]))
 
         # Data to transmit depends on whether we're changing the PICC master key or an application key
         # and whether we're changing the key we're authenticated with or a different one
@@ -774,7 +785,7 @@ class DESFire:
             logger.warning("Tried to change default key without authentication")
             raise DESFireException("Not authenticated!")
 
-        logger.info(f"Executing command: change_default_key (0x{DESFireCommand.SET_CONFIGURATION.value:02x}01)")
+        logger.info("Executing command: change_default_key (0x%02x01)", DESFireCommand.SET_CONFIGURATION.value)
 
         # 0x5C is related to the card configuration, 0x01 is the dedault key
         data = self._command(DESFireCommand.SET_CONFIGURATION.value, [0x01])
@@ -808,23 +819,23 @@ class DESFire:
         Returns:
             list[list[int]]: List of application IDs, in a 4 byte hex form
         """
-        logger.info(f"Executing command: get_application_ids (0x{DESFireCommand.GET_APPLICATION_IDS.value:02x})")
+        logger.info("Executing command: get_application_ids (0x %02x)", DESFireCommand.GET_APPLICATION_IDS.value)
 
         raw_data = self._transceive(
             self._command(DESFireCommand.GET_APPLICATION_IDS.value),
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
-        logger.debug(f"Raw data: {to_hex_string(raw_data)}")
+        logger.debug("Raw data: %s", to_hex_string(raw_data))
 
         # Parse App data, each of them is 3 bytes long
         apps = []
         for i in range(0, len(raw_data), 3):
             appid = [raw_data[i + 0]] + [raw_data[i + 1]] + [raw_data[i + 2]]
-            logger.debug(f"Found application with AppID {to_hex_string(appid)}")
+            logger.debug("Found application with AppID %s", to_hex_string(appid))
             apps.append(appid)
 
-        logger.debug(f"Found {len(apps)} applications")
+        logger.debug("Found %d applications", len(apps))
         return apps
 
     def select_application(self, appid: list[int] | str | bytearray | int | bytes):
@@ -840,7 +851,7 @@ class DESFire:
         """
 
         parsed_appid = get_list(appid, 3, "big")
-        logger.info(f"Selecting application with ID {to_hex_string(parsed_appid)}")
+        logger.info("Selecting application with ID %s", to_hex_string(parsed_appid))
 
         parameters = [parsed_appid[0], parsed_appid[1], parsed_appid[2]]
 
@@ -877,10 +888,6 @@ class DESFire:
             DESFireException: if an invalid configuration is provided
         """
 
-        if not self.is_authenticated:
-            logger.error("Tried to create application without authentication")
-            raise DESFireException("Not authenticated!")
-
         if not keysettings.settings or not keysettings.key_type:
             logger.error("Key type and key settings must be set in the KeySettings object.")
             raise DESFireException("The key type and key settings must be set in the KeySettings object.")
@@ -890,7 +897,7 @@ class DESFire:
             raise DESFireException("Key count must be between 0 and 14.")
 
         appid = get_list(appid, 3, "big")
-        logger.info(f"Creating application with ID: {to_hex_string(appid)}, ")
+        logger.info("Creating application with ID: %s, key settings: %s, key count: %d", to_hex_string(appid), keysettings.get_settings(), keycount)
 
         # Structure of the APDU:
         # 0xCA + AppID (3 bytes) + key settings (1 byte) + app settings (4 MSB = key type, 4 LSB = key count)
@@ -899,7 +906,7 @@ class DESFire:
         self._transceive(
             self._command(cmd, params),
             DESFireCommunicationMode.PLAIN,
-            DESFireCommunicationMode.CMAC,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
         logger.debug("Application created successfully")
 
@@ -917,17 +924,13 @@ class DESFire:
             DESFireException: if an invalid configuration is provided
         """
 
-        if not self.is_authenticated:
-            logger.error("Tried to delete application without authentication")
-            raise DESFireException("Not authenticated!")
-
         appid = get_list(appid, 3, "big")
         logger.info("Deleting application for ID %s", to_hex_string(appid))
 
         self._transceive(
             self._command(DESFireCommand.DELETE_APPLICATION.value, appid),
             DESFireCommunicationMode.PLAIN,
-            DESFireCommunicationMode.CMAC,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
 
     #
@@ -952,7 +955,7 @@ class DESFire:
             logger.error("Tried to get file IDs without selecting an application")
             raise DESFireException("No application selected, call select_application first")
 
-        logger.info(f"Executing command: get_file_ids (0x{DESFireCommand.GET_FILE_IDS.value:02x})")
+        logger.info("Executing command: get_file_ids (0x%02x)", DESFireCommand.GET_FILE_IDS.value)
         file_ids = []
 
         raw_data = self._transceive(
@@ -967,7 +970,7 @@ class DESFire:
         else:
             for byte in raw_data:
                 file_ids.append(byte)
-            logger.debug(f"File ids: {''.join([to_hex_string([id]) for id in file_ids])}")
+            logger.debug("File ids: %s", ''.join([to_hex_string([id]) for id in file_ids]))
 
         return file_ids
 
@@ -994,8 +997,9 @@ class DESFire:
 
         file_id_bytes = get_list(file_id, 1, "big")
         logger.info(
-            f"Executing command: get_file_settings (0x{DESFireCommand.GET_FILE_SETTINGS.value:02x})"
-            f" for file {to_hex_string(file_id_bytes)}"
+            "Executing command: get_file_settings (0x%02x) for file %s",
+            DESFireCommand.GET_FILE_SETTINGS.value,
+            to_hex_string(file_id_bytes)
         )
 
         # Get the file settings
@@ -1004,12 +1008,12 @@ class DESFire:
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
-        logger.debug(f"Raw data: {to_hex_string(raw_data)}")
+        logger.debug("Raw data: %s", to_hex_string(raw_data))
 
         # Parse the raw data
         file_settings = FileSettings()
         file_settings.parse(raw_data)
-        logger.debug(f"File settings: {repr(file_settings)}")
+        logger.debug("File settings: %s", repr(file_settings))
 
         return file_settings
 
@@ -1038,7 +1042,7 @@ class DESFire:
             raise DESFireException("No application selected, call select_application first")
 
         assert file_settings.encryption is not None
-        logger.info(f"Executing command: read_file_data (0x{DESFireCommand.READ_DATA.value:02x}) for file {file_id:x}")
+        logger.info("Executing command: read_file_data (0x%02x) for file %s", DESFireCommand.READ_DATA.value, to_hex_string(get_list(file_id, 1)))
 
         file_id_bytes = get_list(file_id, 1)
         length = get_int(file_settings.file_size, "big")
@@ -1047,18 +1051,18 @@ class DESFire:
 
         while length > 0:
             count = min(length, 48)
-            logger.debug(f"Reading {count} bytes from offset {ioffset}")
+            logger.debug("Reading %d bytes from offset %d", count, ioffset)
             params = file_id_bytes + get_list(ioffset, 3, "little") + get_list(count, 3, "little")
             ret += self._transceive(
                 self._command(DESFireCommand.READ_DATA.value, params),
                 DESFireCommunicationMode.PLAIN,
                 file_settings.encryption,
             )
-            logger.debug(f"Read raw data: {to_hex_string(ret)}")
+            logger.debug("Read raw data: %s", to_hex_string(ret))
             ioffset += count
             length -= count
 
-        logger.debug(f"Total data that has been read: {to_hex_string(ret)}")
+        logger.debug("Total data that has been read: %s", to_hex_string(ret))
         return ret
 
     def read_records(
@@ -1090,7 +1094,7 @@ class DESFire:
             raise DESFireException("No application selected, call select_application first")
 
         assert file_settings.encryption is not None
-        logger.info(f"Executing command: read_record (0x{DESFireCommand.READ_RECORDS.value:02x}) for file {file_id:x}")
+        logger.info("Executing command: read_record (0x%02x) for file %s", DESFireCommand.READ_RECORDS.value, to_hex_string(get_list(file_id, 1)))
 
         file_id_bytes = get_list(file_id, 1)
         ret = []
@@ -1101,15 +1105,44 @@ class DESFire:
             DESFireCommunicationMode.PLAIN,
             file_settings.encryption,
         )
-        logger.debug(f"Read raw data: {to_hex_string(ret)}")
+        logger.debug("Read raw data: %s", to_hex_string(ret))
 
         records = len(ret) // file_settings.file_size
         ret_records = []
         for i in range(records):
             record_data = ret[i * file_settings.file_size : (i + 1) * file_settings.file_size]
-            logger.debug(f"Record {i}: {to_hex_string(record_data)}")
+            logger.debug("Record %d: %s", i, to_hex_string(record_data))
             ret_records += [record_data]
         return ret_records
+    
+    def read_value(self, file_id: int, file_settings: FileSettings) -> int:
+        """
+        Reads a value file and returns the value as an integer.
+
+        Authentication:
+            MAY be required depending on the application settings.
+        
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings.
+                Can be obtained using the `get_file_settings` method.
+        """
+        
+        if not self.last_selected_application:
+            logger.error("Tried to read value data without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        assert file_settings.encryption is not None
+        logger.info("Executing command: read_value (0x%02x) for file %s", DESFireCommand.GET_VALUE.value, to_hex_string(get_list(file_id, 1)))
+
+        file_id_bytes = get_list(file_id, 1)
+        raw_data = self._transceive(
+            self._command(DESFireCommand.GET_VALUE.value, file_id_bytes),
+            DESFireCommunicationMode.PLAIN,
+            file_settings.encryption,
+        )
+        logger.debug("Read raw data: %s", to_hex_string(raw_data))
+        return int.from_bytes(raw_data, byteorder="little", signed=False)
 
     def create_standard_file(self, file_id: int, file_settings: FileSettings):
         """
@@ -1137,7 +1170,9 @@ class DESFire:
 
         logger.info(
             "Executing command: create_standard_file"
-            " (0x{DESFireCommand.CREATE_STD_DATA_FILE.value:02x}) on file {file_id:x}"
+            " (0x%02x) on file %s",
+            DESFireCommand.CREATE_STD_DATA_FILE.value,
+            to_hex_string(get_list(file_id, 1))
         )
 
         assert file_settings.encryption is not None
@@ -1155,6 +1190,186 @@ class DESFire:
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
+        
+    def create_backup_file(self, file_id: int, file_settings: FileSettings):
+        """
+        Creates a backup data file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
+                should be applied to the file.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to create file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        if not 0 <= file_settings.file_size <= 0xFFFFFF:
+            logger.error("File size can be maximum of 3 bytes be between 0 and 16777215 (three bytes)")
+            raise DESFireException("File size must be between 0 and 16777215 (three bytes)")
+
+        logger.info(
+            "Executing command: create_backup_file"
+            " (0x%02x) on file %s",
+            DESFireCommand.CREATE_BACKUP_DATA_FILE.value,
+            to_hex_string(get_list(file_id, 1))
+        )
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        data: list[int] = get_list(file_id, 1, "big")
+        data += [file_settings.encryption.value]
+        data += file_settings.permissions.get_permissions()
+
+        # File size is stored in little endian
+        data += get_list(file_settings.file_size, 3, "little")
+
+        self._transceive(
+            self._command(DESFireCommand.CREATE_BACKUP_DATA_FILE.value, data),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+        
+    def create_value_file(self, file_id: int, file_settings: FileSettings):
+        """
+        Creates a value file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+            
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
+                should be applied to the file.
+                
+        """
+        
+        if not self.last_selected_application:
+            logger.error("Tried to create file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(
+            "Executing command: create_value_file"
+            " (0x%02x) on file %s",
+            DESFireCommand.CREATE_VALUE_FILE.value,
+            to_hex_string(get_list(file_id, 1))
+        )
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        data: list[int] = get_list(file_id, 1, "big")
+        data += [file_settings.encryption.value]
+        data += file_settings.permissions.get_permissions()
+        data += get_list(file_settings.lower_limit, 4, "little")
+        data += get_list(file_settings.upper_limit, 4, "little")
+        data += get_list(file_settings.value, 4, "little")
+        data += [0x01 if file_settings.limited_credit_enabled else 0x00]
+
+        self._transceive(
+            self._command(DESFireCommand.CREATE_VALUE_FILE.value, data),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+        
+    def create_linear_record_file(self, file_id: int, file_settings: FileSettings):
+        """
+        Creates a record file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+            
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
+                should be applied to the file.
+        """
+        
+        if not self.last_selected_application:
+            logger.error("Tried to create file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        if not 0 <= file_settings.file_size <= 0xFFFFFF:
+            logger.error("File size can be maximum of 3 bytes be between 0 and 16777215 (three bytes)")
+            raise DESFireException("File size must be between 0 and 16777215 (three bytes)")
+
+        logger.info(
+            "Executing command: create_linear_record_file"
+            " (0x%02x) on file %s",
+            DESFireCommand.CREATE_LINEAR_RECORD_FILE.value,
+            to_hex_string(get_list(file_id, 1))
+        )
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        data: list[int] = get_list(file_id, 1, "big")
+        data += [file_settings.encryption.value]
+        data += file_settings.permissions.get_permissions()
+
+        # File size is stored in little endian
+        data += get_list(file_settings.file_size, 3, "little")
+        data += get_list(file_settings.max_record_count, 3, "little")
+        
+        self._transceive(
+            self._command(DESFireCommand.CREATE_LINEAR_RECORD_FILE.value, data),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+        
+    def create_cyclic_record_file(self, file_id: int, file_settings: FileSettings):
+        """
+        Creates a cyclic record file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+            
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
+                should be applied to the file.
+        """
+        
+        if not self.last_selected_application:
+            logger.error("Tried to create file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        if not 0 <= file_settings.file_size <= 0xFFFFFF:
+            logger.error("File size can be maximum of 3 bytes be between 0 and 16777215 (three bytes)")
+            raise DESFireException("File size must be between 0 and 16777215 (three bytes)")
+
+        logger.info(
+            "Executing command: create_cyclic_record_file"
+            " (0x%02x) on file %s",
+            DESFireCommand.CREATE_CYCLIC_RECORD_FILE.value,
+            to_hex_string(get_list(file_id, 1))
+        )
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        data: list[int] = get_list(file_id, 1, "big")
+        data += [file_settings.encryption.value]
+        data += file_settings.permissions.get_permissions()
+
+        # File size is stored in little endian
+        data += get_list(file_settings.file_size, 3, "little")
+        data += get_list(file_settings.max_record_count, 3, "little")
+        
+        self._transceive(
+            self._command(DESFireCommand.CREATE_CYCLIC_RECORD_FILE.value, data),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+        
 
     def write_file_data(self, file_id: int, offset: int, communication_mode: DESFireCommunicationMode, data: list[int]):
         """
@@ -1182,13 +1397,15 @@ class DESFire:
             raise DESFireException("No application selected, call select_application first")
 
         logger.info(
-            f"Executing command: write_file_data (0x{DESFireCommand.WRITE_DATA.value:02x}) for file {file_id:x}"
+            "Executing command: write_file_data (0x%02x) for file %x",
+            DESFireCommand.WRITE_DATA.value,
+            file_id
         )
 
         max_length = self.max_frame_size - 1 - 7  # 60 - CMD - CMD Header
         length = len(data)
         if length > max_length:
-            logger.error(f"Data length exceeds maximum frame size of {max_length}, not supported yet.")
+            logger.error("Data length exceeds maximum frame size of %d, not supported yet.", max_length)
             raise DESFireException(f"Data length exceeds maximum frame size of {max_length}, not supported yet.")
 
         file_id_bytes = [file_id]
