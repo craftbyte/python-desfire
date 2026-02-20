@@ -1371,7 +1371,7 @@ class DESFire:
         )
         
 
-    def write_file_data(self, file_id: int, offset: int, communication_mode: DESFireCommunicationMode, data: list[int]):
+    def write_file_data(self, file_id: int, offset: int, communication_mode: DESFireCommunicationMode, data: list[int] | str | bytearray | int | bytes):
         """
         Writes data to the file specified by file_id
 
@@ -1401,6 +1401,7 @@ class DESFire:
             DESFireCommand.WRITE_DATA.value,
             file_id
         )
+        data = get_list(data)
 
         max_length = self.max_frame_size - 1 - 7  # 60 - CMD - CMD Header
         length = len(data)
@@ -1446,3 +1447,25 @@ class DESFire:
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.PLAIN,
         )
+
+
+    def commit_transaction(self):
+        """
+        Commits the current transaction. If the card is in a transaction, all changes made since the start of the transaction
+        are applied. If the card is not in a transaction, this command has no effect.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        
+        if self.last_selected_application is None or self.last_selected_application == [0x00, 0x00, 0x00]:
+            logger.warning("Tried to commit transaction without selecting an application")
+            raise DESFireException("No application selected!")
+
+        if not self.is_authenticated:
+            logger.warning("Tried to commit transaction without authentication")
+            raise DESFireException("Not authenticated!")
+
+        logger.info("Executing command: commit_transaction (0x%02x)", DESFireCommand.COMMIT_TRANSACTION.value)
+        cmd = DESFireCommand.COMMIT_TRANSACTION.value
+        self._transceive(self._command(cmd), DESFireCommunicationMode.PLAIN, DESFireCommunicationMode.CMAC)

@@ -57,6 +57,8 @@ class DESFireKey:
         self.iv0 = [0] * key_size
 
     def set_iv(self, iv: list[int]):
+        if self.cipher_block_size is not None:
+            iv = iv[-self.cipher_block_size :]
         logger.debug(f"Setting IV to {to_hex_string(iv)}")
         self.iv = iv
 
