@@ -38,7 +38,7 @@ class DESFire:
     # Internal Methods
     #
 
-    def _communicate(self, apdu_cmd: list[int], native: bool = True, af_passthrough: bool = False) -> list[int]:
+    def _communicate(self, apdu_cmd: list[int], native: bool = False, af_passthrough: bool = False) -> list[int]:
         """
         Communicate with a NFC tag. Send in outgoing request and wait for a card reply.
 
@@ -57,52 +57,139 @@ class DESFire:
         """
 
         result: list[int] = []
-        additional_data: bool = True
-        # current_command: bytearray = apdu_cmd
 
-        # Loop until all data is received
-        while additional_data:
-            # Send the APDU command to the card
-            logger.debug("Running APDU command, sending: %s", to_hex_string(apdu_cmd))
-            resp = self.device.transceive(apdu_cmd)
-            logger.debug("Received APDU response: %s", to_hex_string(resp))
+        def _wrap_native_iso_apdu(command: list[int]) -> list[int]:
+            payload = command[1:]
+            apdu = [0x90, command[0], 0x00, 0x00, len(payload)] + payload
+            if payload:
+                apdu.append(0x00)
+            return apdu
 
-            # DESfire native commands are used
-            if native:
+        def _unwrap_native_iso_response(response: list[int]) -> list[int]:
+            if len(response) < 2:
+                raise DESFireCommunicationError(
+                    f"Invalid response length {len(response)} from card. Expected at least 2 bytes for SW1 and SW2.",
+                    response,
+                )
+            if response[-2] != 0x91:
+                raise DESFireCommunicationError(
+                    f"Unexpected SW1 {response[-2]:02X} in response from card. Expected 0x91.",
+                    response[-2:],
+                )
+            return [response[-1]] + response[:-2]
+
+        def _split_command(command: list[int], frame_size: int) -> list[list[int]]:
+            if len(command) <= frame_size:
+                return [command]
+
+            frames: list[list[int]] = [command[:frame_size]]
+            remaining = command[frame_size:]
+            while remaining:
+                chunk = remaining[: frame_size - 1]
+                remaining = remaining[frame_size - 1 :]
+                frames.append([0xAF] + chunk)
+            return frames
+
+        def _transceive_frame(frame: list[int]) -> list[int]:
+            tx_frame = frame if native else _wrap_native_iso_apdu(frame)
+            logger.debug("Running APDU command, sending: %s", to_hex_string(tx_frame))
+            rx_frame = self.device.transceive(tx_frame)
+            logger.debug("Received APDU response: %s", to_hex_string(rx_frame))
+            resp_frame = rx_frame if native else _unwrap_native_iso_response(rx_frame)
+            return resp_frame
+
+        frame_size = self.max_frame_size if native else max(self.max_frame_size - 5, 1)
+        frames = _split_command(apdu_cmd, frame_size)
+        resp: list[int] | None = None
+        
+        logger.debug(f"Command is split into {len(frames)} frame(s) for transmission")
+        logger.debug(f"Frames: {[to_hex_string(frame) for frame in frames]}")
+
+        for frame_index, frame in enumerate(frames):
+            resp = _transceive_frame(frame)
+
+            status = resp[0]
+
+            if frame_index < len(frames) - 1:
+                if status != 0xAF:
+                    try:
+                        error_description = DESFireStatus(status).name
+                    except ValueError:
+                        error_description = f"Unknown error, status {status}"
+                    logger.error("Expected 0xAF while chaining command, received: %s", error_description)
+                    raise DESFireCommunicationError(error_description, status)
+                continue
+
+            # Last command frame has been sent; handle response chaining below.
+
+        if resp is None:
+            return result
+
+        if not native:
+            status = resp[0]
+            result += list(resp[1:])
+
+            if status == 0xAF:
+                if af_passthrough:
+                    logger.debug("More data present (indicated by 0xAF), returning response to callee")
+                    return result
+
+                while True:
+                    logger.debug("More data present (indicated by 0xAF), sending continue command")
+                    resp = _transceive_frame(self._command(0xAF))
+                    status = resp[0]
+                    result += list(resp[1:])
+                    if status == 0xAF:
+                        continue
+                    if status != 0x00:
+                        try:
+                            error_description = DESFireStatus(status).name
+                        except ValueError:
+                            error_description = f"Unknown error, status {status}"
+                        logger.error("Received error from card: %s", error_description)
+                        raise DESFireCommunicationError(error_description, status)
+                    break
+            elif status != 0x00:
+                try:
+                    error_description = DESFireStatus(status).name
+                except ValueError:
+                    error_description = f"Unknown error, status {status}"
+                logger.error("Received error from card: %s", error_description)
+                raise DESFireCommunicationError(error_description, status)
+
+            return result
+
+        # DESfire native commands are used
+        status = resp[0]
+        result += list(resp[1:])
+
+        if status == 0xAF:
+            if af_passthrough:
+                logger.debug("More data present (indicated by 0xAF), returning response to callee")
+                return result
+
+            while True:
+                logger.debug("More data present (indicated by 0xAF), sending continue command")
+                resp = _transceive_frame(self._command(0xAF))
                 status = resp[0]
-                # Check for known error interpretation
+                result += list(resp[1:])
                 if status == 0xAF:
-                    if af_passthrough:
-                        logger.debug("More data present (indicated by 0xAF), returning response to callee")
-                        additional_data = False
-                    else:
-                        # Need to loop more cycles to fill in receive buffer
-                        logger.debug("More data present (indicated by 0xAF), sending continue command")
-                        additional_data = True
-                        apdu_cmd = self._command(0xAF)  # Continue
-                elif status != 0x00:
+                    continue
+                if status != 0x00:
                     try:
                         error_description = DESFireStatus(status).name
                     except ValueError:
                         error_description = f"Unknown error, status {status}"
                     logger.error("Received error from card: %s", error_description)
                     raise DESFireCommunicationError(error_description, status)
-                else:
-                    additional_data = False
-            else:  # If commands are wrapped in ISO 7816-4 APDU Frames, SW1 must be 0x91
-                if resp[-2] != 0x91:
-                    raise DESFireCommunicationError(
-                        "Received invalid response for command using native communication", resp[-2:]
-                    )
-                # Possible status words:
-                # https://github.com/jekkos/android-hce-desfire/blob/master/hceappletdesfire/src/main/java/net/jpeelaer/hce/desfire/DesfireStatusWord.java
-                status = resp[-1]
-                unframed = list(resp[0:-2])
-
-            # This will un-memoryview this object as there seems to be some pyjnius
-            # bug getting this corrupted down along the line
-            unframed = list(resp[1:])
-            result += unframed
+                break
+        elif status != 0x00:
+            try:
+                error_description = DESFireStatus(status).name
+            except ValueError:
+                error_description = f"Unknown error, status {status}"
+            logger.error("Received error from card: %s", error_description)
+            raise DESFireCommunicationError(error_description, status)
 
         return result
 
@@ -1405,9 +1492,9 @@ class DESFire:
 
         max_length = self.max_frame_size - 1 - 7  # 60 - CMD - CMD Header
         length = len(data)
-        if length > max_length:
-            logger.error("Data length exceeds maximum frame size of %d, not supported yet.", max_length)
-            raise DESFireException(f"Data length exceeds maximum frame size of {max_length}, not supported yet.")
+        # if length > max_length:
+        #     logger.error("Data length exceeds maximum frame size of %d, not supported yet.", max_length)
+        #     raise DESFireException(f"Data length exceeds maximum frame size of {max_length}, not supported yet.")
 
         file_id_bytes = [file_id]
         offset_bytes = get_list(offset, 3, "little")  # Left aligned
