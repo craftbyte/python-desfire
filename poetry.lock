@@ -235,6 +235,21 @@ MarkupSafe = ">=2.0"
 i18n = ["Babel (>=2.7)"]
 
 [[package]]
+name = "libusb1"
+version = "3.3.1"
+description = "Pure-python wrapper for libusb-1.0"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"pn532\" or extra == \"all\""
+files = [
+    {file = "libusb1-3.3.1-py3-none-any.whl", hash = "sha256:808c9362299dcee01651aa87e71e9d681ccedb27fc4dbd70aaf14e245fb855f1"},
+    {file = "libusb1-3.3.1-py3-none-win32.whl", hash = "sha256:0ef69825173ce74af34444754c081cc324233edc6acc405658b3ad784833e076"},
+    {file = "libusb1-3.3.1-py3-none-win_amd64.whl", hash = "sha256:6e21b772d80d6487fbb55d3d2141218536db302da82f1983754e96c72781c102"},
+    {file = "libusb1-3.3.1.tar.gz", hash = "sha256:3951d360f2daf0e0eacf839e15d2d1d2f4f5e7830231eb3188eeffef2dd17bad"},
+]
+
+[[package]]
 name = "markdown"
 version = "3.7"
 description = "Python implementation of John Gruber's Markdown."
@@ -557,6 +572,38 @@ files = [
 ]
 
 [[package]]
+name = "ndeflib"
+version = "0.3.3"
+description = "NFC Data Exchange Format decoder and encoder."
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"pn532\" or extra == \"all\""
+files = [
+    {file = "ndeflib-0.3.3-py2.py3-none-any.whl", hash = "sha256:c634b1af2ab454754f0fdbe1debd38247ed7bdaf94587359b857726f3ee7decb"},
+    {file = "ndeflib-0.3.3.tar.gz", hash = "sha256:1d56828558b9b16f2822a4051824346347b66adf5320ea86070748b6f2454a88"},
+]
+
+[[package]]
+name = "nfcpy"
+version = "1.0.4"
+description = "Python module for Near Field Communication."
+optional = true
+python-versions = ">=2.6"
+groups = ["main"]
+markers = "extra == \"pn532\" or extra == \"all\""
+files = [
+    {file = "nfcpy-1.0.4-py3-none-any.whl", hash = "sha256:c1f3ecdd9755f9af46e89a945ed490354d089d5b19422e307159e256ff8c1b3d"},
+    {file = "nfcpy-1.0.4.tar.gz", hash = "sha256:e5bd08d0119e1d9e95d05215f838b07b44d03b651adddc523cc1a38892b8af6b"},
+]
+
+[package.dependencies]
+libusb1 = "*"
+ndeflib = "*"
+pydes = "*"
+pyserial = "*"
+
+[[package]]
 name = "packaging"
 version = "24.2"
 description = "Core utilities for Python packages"
@@ -669,6 +716,18 @@ files = [
     {file = "pycryptodome-3.21.0-pp39-pypy39_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:ff99f952db3db2fbe98a0b355175f93ec334ba3d01bbde25ad3a5a33abc02b58"},
     {file = "pycryptodome-3.21.0-pp39-pypy39_pp73-win_amd64.whl", hash = "sha256:8acd7d34af70ee63f9a849f957558e49a98f8f1634f86a59d2be62bb8e93f71c"},
     {file = "pycryptodome-3.21.0.tar.gz", hash = "sha256:f7787e0d469bdae763b876174cf2e6c0f7be79808af26b1da96f1a64bcf47297"},
+]
+
+[[package]]
+name = "pydes"
+version = "2.0.1"
+description = "Pure python implementation of DES and TRIPLE DES encryption algorithm"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"pn532\" or extra == \"all\""
+files = [
+    {file = "pyDes-2.0.1.tar.gz", hash = "sha256:e2ab8e21d2b83e90d90dbfdcb6fb8ac0000b813238b7ecaede04f8435c389012"},
 ]
 
 [[package]]
@@ -1107,11 +1166,11 @@ files = [
 watchmedo = ["PyYAML (>=3.10)"]
 
 [extras]
-all = ["pyscard", "pyserial"]
+all = ["nfcpy", "pyscard"]
 pcsc = ["pyscard"]
-pn532 = ["pyserial"]
+pn532 = ["nfcpy"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "da138f6f8f3a0b869f1f9116aad2ac4ac6049fd988d52007b6939a253628d36b"
+content-hash = "dd3d2d85aaa8add976a66c32fb701189c4872fa33527d3dc89b12ce1bae70f01"

@@ -6,12 +6,12 @@ This package provides a simple interface of interacting with DESFire chips using
 It currently supports managing keys, applications and file operations, which should cover the majority of use cases.
 AES-128 is fully supported both, DES/3DES currently only receives limited testing up to the extend that is needed to change the default key and create applications.
 
-Both PC/SC readers as well as the popular PN532 reader (only UART, no SPI or I2C as of today) is supported.
+Both PC/SC readers as well as the popular PN532 reader via nfcpy are supported.
 Please make sure to install the correct extra dependencies.
 
 **Core features**:
 
-- Compatible with all PC/SC readers supported by `pyscard` or PN532 reader using UART (using `pyserial` as only additional dependency)
+- Compatible with all PC/SC readers supported by `pyscard` or PN532 readers supported by `nfcpy`
 - Support for **AES and ISO authentication (DES, 2K3DES and 3K3DES)**. No support for legacy authentication.
 - Full crypto support including **CMAC and CRC validation** on all commands that require it
 - **Key management** change and create keys on PICC and application leven
@@ -19,7 +19,7 @@ Please make sure to install the correct extra dependencies.
 - **File management** support for standard data files is implemented, other file types are currently not available
 
 Currently, the library has been used and tested with EV1 cards and CSL USB Reader, but other PC/SC compatible readers should work the same.
-It is also tested using PN532 readers, although I recommend using the Adafruit reader for better compatibility.
+It is also tested using PN532 readers through nfcpy.
 
 !!! warning "NDA and Accuracy"
     Note that NXP does not release the DESFire documentation to the public, NDA signature is required to obtain this information.
@@ -101,8 +101,8 @@ representation using integer lists. More details on that can be found in the ...
 
 ### PN532
 
-The PN532 reader must be connected to UART, either using a USB / UART driver or - if you're using a Raspberry PI - it is also possible using
-one of the built-in UARTs.
+The PN532 reader is accessed through nfcpy. You can pass either a legacy serial
+device path like `/dev/ttyAMA2` or a full nfcpy device path like `tty:AMA2:pn532`.
 
 ```python
 import logging
@@ -114,14 +114,14 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Create physical device which can be used to detect a card
-device = PN532UARTDevice("/dev/ttyAMA2", baudrate=115200, timeout=0.1)
+device = PN532UARTDevice("/dev/ttyAMA2")
 
 # Wait for a card
 uid = None
 i = 0
 
 while not uid and i < 10:
-    logger.info(f"Connecting to card (attempt {i + 1})...")
+    logger.info("Connecting to card (attempt %s)...", i + 1)
     uid = device.wait_for_card(timeout=1)
     i += 1
 

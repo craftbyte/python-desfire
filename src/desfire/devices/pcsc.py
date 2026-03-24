@@ -26,12 +26,12 @@ class PCSCDevice(Device):
 
         self.card_connection = card_connection
 
-    def transceive(self, bytes: list[int]) -> list[int]:
+    def transceive(self, data: list[int]) -> list[int]:
         """
         Send in APDU request and wait for the response.
 
         Args:
-            bytes (list[int]): Outgoing bytes as list of bytes or byte array
+            data (list[int]): Outgoing bytes as list of bytes or byte array
 
         Returns:
             list[int]: List of bytes or byte array from the device.
@@ -44,7 +44,7 @@ class PCSCDevice(Device):
 
         # http://pyscard.sourceforge.net/epydoc/smartcard.scard.scard-module.html#SCardTransmit
 
-        hresult, response = SCardTransmit(self.card_connection.hcard, pcscprotocolheader, bytes)
+        hresult, response = SCardTransmit(self.card_connection.hcard, pcscprotocolheader, data)
         if hresult != 0:
             raise CardConnectionException(
                 f"Failed to transmit with protocol {str(pcscprotocolheader)}." + SCardGetErrorMessage(hresult)

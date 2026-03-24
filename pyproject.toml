@@ -18,13 +18,13 @@ pcsc = [
     "pyscard (>=2.2.1,<3.0.0)",
 ]
 pn532 = [
-    # pyserial for PN532 connectivity
-    "pyserial (>=3.5,<4.0)"
+    # nfcpy for PN532 connectivity
+    "nfcpy (>=1.0.4,<2.0.0)"
 ]
 all = [
     # All optional dependencies
     "pyscard (>=2.2.1,<3.0.0)",
-    "pyserial (>=3.5,<4.0)"
+    "nfcpy (>=1.0.4,<2.0.0)"
 ]
 
 [tool.poetry]

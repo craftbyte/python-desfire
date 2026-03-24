@@ -1,260 +1,148 @@
-import time
+import importlib
+import math
+import os
+from typing import Any
 
 from ..exceptions import DESFireException
-from ..util import get_list
 from .base import Device
 
-# Try importing pyserial
-try:
-    import serial
-except ImportError:
-    _has_serial = False
-else:
-    _has_serial = True
+nfc: Any | None = None
+Type4Tag: Any | None = None
 
-_PREAMBLE = 0x00
-_STARTCODE1 = 0x00
-_STARTCODE2 = 0xFF
-_POSTAMBLE = 0x00
-_HOSTTOPN532 = 0xD4
-_PN532TOHOST = 0xD5
-_MIFARE_ISO14443A = 0x00
-_COMMAND_GETFIRMWAREVERSION = 0x02
-_COMMAND_SAMCONFIGURATION = 0x14
-_COMMAND_INDATAEXCHANGE = 0x40
-_COMMAND_INLISTPASSIVETARGET = 0x4A
-_ACK = b"\x00\x00\xff\x00\xff\x00"
+try:
+    nfc = importlib.import_module("nfc")
+    importlib.import_module("nfc.clf")
+    importlib.import_module("nfc.tag")
+    Type4Tag = importlib.import_module("nfc.tag.tt4").Type4Tag
+except ImportError:
+    _has_nfcpy = False
+else:
+    _has_nfcpy = True
 
 
 class PN532UARTDevice(Device):
     """
-    Wrapper around a pyserial based connection to a PN532 device.
+    Wrapper around an nfcpy based connection to a PN532 device.
+
+    The constructor accepts either a legacy serial device path such as
+    ``/dev/ttyAMA2`` or an nfcpy device path such as ``tty:AMA2:pn532``.
     """
 
-    def __init__(self, port: str, listen_timeout: float = 1, **kwargs):
+    def __init__(
+        self,
+        port: str,
+        listen_timeout: float = 1,
+        *,
+        path: str | None = None,
+        sense_interval: float = 0.1,
+        transceive_timeout: float | None = None,
+        **kwargs,
+    ):
         """
-        Initializes a device connected to a PN532 device over UART.
+        Initializes a device connected to a PN532 device through nfcpy.
 
         Args:
-            port (str): The port to connect to, e.g. "/dev/ttyS0" or "COM1".
-            listen_timeout (float): The timeout for passive target listening in seconds.
+            port (str): Legacy serial path such as ``/dev/ttyAMA2`` or a fully
+                qualified nfcpy device path such as ``tty:AMA2:pn532``.
+            listen_timeout (float): Default timeout used by :meth:`wait_for_card`.
+            path (str | None): Explicit nfcpy device path. If provided it takes
+                precedence over ``port``.
+            sense_interval (float): Delay between polling attempts while waiting
+                for a card.
+            transceive_timeout (float | None): Optional per-command timeout in
+                seconds passed to nfcpy.
 
         Keyword Args:
-            All keyword arguments are passed to the pyserial.Serial constructor.
+            Additional keyword arguments are accepted for compatibility with the
+            previous pyserial-based implementation and ignored.
         """
-        if not _has_serial:
-            raise ImportError("pyserial is required for using PN532UARTDevice")
+        if not _has_nfcpy or nfc is None or Type4Tag is None:
+            raise ImportError("nfcpy is required for using PN532UARTDevice")
 
-        self._uart = serial.Serial(port, **kwargs)
-        self._wakeup()
-        # read out firmware version, primary purpose is checking if connection was successful
-        self.ic, self.ver, self.rev, self.support = self.firmware_version()
-        self._sam_configuration()
-        self._listen_for_passive_target(timeout=listen_timeout)
+        self._nfc = nfc
+        self._type4_tag_class = Type4Tag
+        self._default_wait_timeout = listen_timeout
+        self._sense_interval = sense_interval
+        self._transceive_timeout = transceive_timeout
+        self._ignored_kwargs = dict(kwargs)
+        self._target = None
+        self._tag = None
+        self._path = path or self._resolve_path(port)
+        self._clf = self._nfc.ContactlessFrontend()
 
-    def _wakeup(self) -> None:
-        """Send a special command to wake up PN532"""
-        self._uart.write(b"\x55\x55\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+        if not self._clf.open(self._path):
+            raise RuntimeError(f"Failed to open NFC frontend at {self._path}")
 
-    def firmware_version(self):
-        """Call PN532 GetFirmwareVersion function and return a tuple with the IC,
-        Ver, Rev, and Support values.
-        """
-        response = self._call_function(_COMMAND_GETFIRMWAREVERSION, 4, timeout=1)
-        if response is None:
-            raise RuntimeError("Failed to detect the PN532")
-        return tuple(response)
+    @staticmethod
+    def _resolve_path(port: str) -> str:
+        if any(port.startswith(prefix) for prefix in ("usb", "tty:", "com:", "udp")):
+            return port
 
-    def _sam_configuration(self) -> None:
-        """Configure the PN532 to read MiFare cards."""
-        self._call_function(_COMMAND_SAMCONFIGURATION, params=[0x01, 0x14, 0x01])
+        if port.startswith("/dev/tty"):
+            return f"tty:{os.path.basename(port)[3:]}:pn532"
 
-    def _write_data(self, framebytes: bytes) -> None:
-        """Write a specified count of bytes to the PN532"""
-        self._uart.reset_input_buffer()
-        self._uart.write(framebytes)
+        if port.upper().startswith("COM") and port[3:].isdigit():
+            return f"com:{port[3:]}:pn532"
 
-    def _write_frame(self, data: bytearray) -> None:
-        """Write a frame to the PN532 with the specified data bytearray."""
-        assert data is not None and 1 < len(data) < 255, "Data must be array of 1 to 255 bytes."
-        # Build frame to send as:
-        # - Preamble (0x00)
-        # - Start code  (0x00, 0xFF)
-        # - Command length (1 byte)
-        # - Command length checksum
-        # - Command bytes
-        # - Checksum
-        # - Postamble (0x00)
-        length = len(data)
-        frame = bytearray(length + 8)
-        frame[0] = _PREAMBLE
-        frame[1] = _STARTCODE1
-        frame[2] = _STARTCODE2
-        checksum = sum(frame[0:3])
-        frame[3] = length & 0xFF
-        frame[4] = (~length + 1) & 0xFF
-        frame[5:-2] = data
-        checksum += sum(data)
-        frame[-2] = ~checksum & 0xFF
-        frame[-1] = _POSTAMBLE
-        # Send frame.
-        self._write_data(bytes(frame))
+        return port
 
-    def _wait_ready(self, timeout: float = 1) -> bool:
-        """Wait `timeout` seconds"""
-        timestamp = time.monotonic()
-        while (time.monotonic() - timestamp) < timeout:
-            if self._uart.in_waiting > 0:
-                return True  # No Longer Busy
-            time.sleep(0.01)  # lets ask again soon!
-        # Timed out!
-        return False
+    def close(self) -> None:
+        """Close the underlying nfcpy frontend."""
+        self._clf.close()
+        self._target = None
+        self._tag = None
 
-    def _read_data(self, count: int) -> bytes:
-        """Read a specified count of bytes from the PN532."""
-        frame = self._uart.read(count)
-        if not frame:
-            raise DESFireException("No data read from PN532")
-        return frame
+    def __del__(self):
+        clf = getattr(self, "_clf", None)
+        if clf is None:
+            return
 
-    def _send_command(self, command: int, params: list[int], timeout: float = 1) -> bool:
-        """Send specified command to the PN532 and wait for an acknowledgment.
-        Will wait up to timeout seconds for the acknowledgment and return True.
-        If no acknowledgment is received, False is returned.
-        """
-
-        # Build frame data with command and parameters.
-        data = bytearray(2 + len(params))
-        data[0] = _HOSTTOPN532
-        data[1] = command & 0xFF
-        for i, val in enumerate(params):
-            data[2 + i] = val
-        # Send frame and wait for response.
         try:
-            self._write_frame(data)
-        except OSError:
-            return False
-        if not self._wait_ready(timeout):
-            return False
-        # Verify ACK response and wait to be ready for function response.
-        if not _ACK == self._read_data(len(_ACK)):
-            raise RuntimeError("Did not receive expected ACK from PN532!")
-        return True
+            clf.close()
+        except (AttributeError, OSError, RuntimeError):
+            pass
 
-    def _read_frame(self, length: int) -> list[int]:
-        """Read a response frame from the PN532 of at most length bytes in size.
-        Returns the data inside the frame if found, otherwise raises an exception
-        if there is an error parsing the frame.  Note that less than length bytes
-        might be returned!
-        """
-        # Read frame with expected length of data.
-        response = self._read_data(length + 7)
+    def wait_for_card(self, timeout: float | None = None) -> list[int] | None:
+        """Wait for a Type 4 tag and return its UID when found."""
+        effective_timeout = self._default_wait_timeout if timeout is None else timeout
+        target_request = self._nfc.clf.RemoteTarget("106A")
 
-        # Swallow all the 0x00 values that preceed 0xFF.
-        offset = 0
-        while response[offset] == 0x00:
-            offset += 1
-            if offset >= len(response):
-                raise RuntimeError("Response frame preamble does not contain 0x00FF!")
-        if response[offset] != 0xFF:
-            raise RuntimeError("Response frame preamble does not contain 0x00FF!")
-        offset += 1
-        if offset >= len(response):
-            raise RuntimeError("Response contains no data!")
-        # Check length & length checksum match.
-        frame_len = response[offset]
-        if (frame_len + response[offset + 1]) & 0xFF != 0:
-            raise RuntimeError("Response length checksum did not match length!")
-        # Check frame checksum value matches bytes.
-        checksum = sum(response[offset + 2 : offset + 2 + frame_len + 1]) & 0xFF
-        if checksum != 0:
-            raise RuntimeError("Response checksum did not match expected value: ", checksum)
-        # Return frame data.
-        return get_list(response[offset + 2 : offset + 2 + frame_len])
+        if effective_timeout is None:
+            while True:
+                target = self._clf.sense(target_request, iterations=5, interval=self._sense_interval)
+                if target is not None:
+                    return self._activate_target(target)
 
-    def _process_response(self, command: int, response_length: int = 0, timeout: float = 1) -> list[int] | None:
-        """Process the response from the PN532 and expect up to response_length
-        bytes back in a response.  Note that less than the expected bytes might
-        be returned! Will wait up to timeout seconds for a response and return
-        a bytearray of response bytes, or None if no response is available
-        within the timeout.
-        """
-        if not self._wait_ready(timeout):
+        iterations = max(1, math.ceil(effective_timeout / self._sense_interval))
+        target = self._clf.sense(target_request, iterations=iterations, interval=self._sense_interval)
+        if target is None:
             return None
-        # Read response bytes.
-        response = self._read_frame(response_length + 2)
-        # Check that response is for the called function.
-        if not (response[0] == _PN532TOHOST and response[1] == (command + 1)):
-            raise RuntimeError("Received unexpected command response!")
+        return self._activate_target(target)
 
-        # If command was InDataExchange, check that response is success.
-        if command == _COMMAND_INDATAEXCHANGE:
-            if not response[2] == 0x00:
-                raise RuntimeError("Received PN532 error code in response: ", response[2])
-            return response[3:]
+    def _activate_target(self, target: Any) -> list[int]:
+        tag = self._nfc.tag.activate(self._clf, target)
+        if not isinstance(tag, self._type4_tag_class):
+            raise DESFireException(f"Detected card is not an ISO-DEP Type 4 tag: {tag!r}")
 
-        # Return response data.
-        return response[2:]
+        self._target = target
+        self._tag = tag
+        return list(tag.identifier)
 
-    def _call_function(
-        self, command: int, response_length: int = 0, params: list[int] = [], timeout: float = 1
-    ) -> list[int] | None:
-        """
-        Send specified command to the PN532 and expect up to response_length
-        bytes back in a response.  Note that less than the expected bytes might
-        be returned!  Params can optionally specify an array of bytes to send as
-        parameters to the function call.  Will wait up to timeout seconds
-        for a response and return a bytearray of response bytes, or None if no
-        response is available within the timeout.
-        """
-        if not self._send_command(command, params=params, timeout=timeout):
-            return None
-        return self._process_response(command, response_length=response_length, timeout=timeout)
-
-    def _listen_for_passive_target(self, card_baud: int = _MIFARE_ISO14443A, timeout: float = 1) -> bool:
-        """Send command to PN532 to begin listening for a Mifare card. This
-        returns True if the command was received successfully. Note, this does
-        not also return the UID of a card! `get_passive_target` must be called
-        to read the UID when a card is found. If just looking to see if a card
-        is currently present use `read_passive_target` instead.
-        """
-        # Send passive read command for 1 card.  Expect at most a 7 byte UUID.
-        try:
-            response = self._send_command(_COMMAND_INLISTPASSIVETARGET, params=[0x01, card_baud], timeout=timeout)
-        except Exception:
-            return False  # _COMMAND_INLISTPASSIVETARGET failed
-        return response
-
-    def wait_for_card(self, timeout: float = 1) -> list[int] | None:
-        """Will wait up to timeout seconds and return None if no card is found,
-        otherwise a bytearray with the UID of the found card is returned.
-        `listen_for_passive_target` must have been called first in order to put
-        the PN532 into a listening mode.
-        It can be useful to use this when using the IRQ pin. Use the IRQ pin to
-        detect when a card is present and then call this function to read the
-        card's UID. This reduces the amount of time spend checking for a card.
-        """
-        response = self._process_response(_COMMAND_INLISTPASSIVETARGET, response_length=30, timeout=timeout)
-        # If no response is available return None to indicate no card is present.
-        if response is None:
-            return None
-        # Check only 1 card with up to a 7 byte UID is present.
-        if response[0] != 0x01:
-            raise RuntimeError("More than one card detected!")
-        if response[5] > 7:
-            raise RuntimeError("Found card with unexpectedly long UID!")
-        # Return UID of card.
-        return response[6 : 6 + response[5]]
-
-    def transceive(self, bytes: list[int]) -> list[int]:
+    def transceive(self, data: list[int]) -> list[int]:
         """
         Send in APDU request and wait for the response.
 
         Args:
-            bytes (list[int]): Outgoing bytes as list of bytes or byte array
+            data (list[int]): Outgoing bytes as list of bytes or byte array
 
         Returns:
             list[int]: List of bytes or byte array from the device.
         """
-        params = [0x01] + bytes
-        return self._call_function(_COMMAND_INDATAEXCHANGE, response_length=0xFF, params=params) or []
+        if self._tag is None or not self._tag.is_present:
+            raise DESFireException("No active card present. Call wait_for_card() first.")
+
+        try:
+            response = self._tag.transceive(bytearray(data), timeout=self._transceive_timeout)
+        except Exception as exc:
+            raise DESFireException(f"Failed to transceive with PN532 via nfcpy: {exc}") from exc
+        return list(response)
